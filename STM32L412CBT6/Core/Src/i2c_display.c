@@ -1,4 +1,5 @@
 #include "i2c_display.h"
+#include <string.h>
 
 static HAL_StatusTypeDef I2CDisplay_SendCommand(I2CDisplay_Typedef *display, uint8_t command)
 {
