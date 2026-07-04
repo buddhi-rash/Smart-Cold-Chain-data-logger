@@ -1,36 +1,326 @@
 #include "i2c_display.h"
 #include <string.h>
 
+static const uint8_t Font5x7[][5] = {
+    {0x00, 0x00, 0x00, 0x00, 0x00}, // Space (32)
+    {0x00, 0x00, 0x5f, 0x00, 0x00}, // !
+    {0x00, 0x07, 0x00, 0x07, 0x00}, // "
+    {0x14, 0x7f, 0x14, 0x7f, 0x14}, // #
+    {0x24, 0x2a, 0x7f, 0x2a, 0x12}, // $
+    {0x23, 0x13, 0x08, 0x64, 0x62}, // %
+    {0x36, 0x49, 0x55, 0x22, 0x50}, // &
+    {0x00, 0x05, 0x03, 0x00, 0x00}, // '
+    {0x00, 0x1c, 0x22, 0x41, 0x00}, // (
+    {0x00, 0x41, 0x22, 0x1c, 0x00}, // )
+    {0x14, 0x08, 0x3e, 0x08, 0x14}, // *
+    {0x08, 0x08, 0x3e, 0x08, 0x08}, // +
+    {0x00, 0x50, 0x30, 0x00, 0x00}, // ,
+    {0x08, 0x08, 0x08, 0x08, 0x08}, // -
+    {0x00, 0x60, 0x60, 0x00, 0x00}, // .
+    {0x20, 0x10, 0x08, 0x04, 0x02}, // /
+    {0x3e, 0x51, 0x49, 0x45, 0x3e}, // 0
+    {0x00, 0x42, 0x7f, 0x40, 0x00}, // 1
+    {0x42, 0x61, 0x51, 0x49, 0x46}, // 2
+    {0x21, 0x41, 0x45, 0x4b, 0x31}, // 3
+    {0x18, 0x14, 0x12, 0x7f, 0x10}, // 4
+    {0x27, 0x45, 0x45, 0x45, 0x39}, // 5
+    {0x3c, 0x4a, 0x49, 0x49, 0x30}, // 6
+    {0x01, 0x71, 0x09, 0x05, 0x03}, // 7
+    {0x36, 0x49, 0x49, 0x49, 0x36}, // 8
+    {0x06, 0x49, 0x49, 0x29, 0x1e}, // 9
+    {0x00, 0x36, 0x36, 0x00, 0x00}, // :
+    {0x00, 0x56, 0x36, 0x00, 0x00}, // ;
+    {0x08, 0x14, 0x22, 0x41, 0x00}, // <
+    {0x14, 0x14, 0x14, 0x14, 0x14}, // =
+    {0x00, 0x41, 0x22, 0x14, 0x08}, // >
+    {0x02, 0x01, 0x51, 0x09, 0x06}, // ?
+    {0x32, 0x49, 0x79, 0x41, 0x3e}, // @
+    {0x7e, 0x11, 0x11, 0x11, 0x7e}, // A
+    {0x7f, 0x49, 0x49, 0x49, 0x36}, // B
+    {0x3e, 0x41, 0x41, 0x41, 0x22}, // C
+    {0x7f, 0x41, 0x41, 0x22, 0x1c}, // D
+    {0x7f, 0x49, 0x49, 0x49, 0x41}, // E
+    {0x7f, 0x09, 0x09, 0x09, 0x01}, // F
+    {0x3e, 0x41, 0x49, 0x49, 0x7a}, // G
+    {0x7f, 0x08, 0x08, 0x08, 0x7f}, // H
+    {0x00, 0x41, 0x7f, 0x41, 0x00}, // I
+    {0x20, 0x40, 0x41, 0x3f, 0x01}, // J
+    {0x7f, 0x08, 0x14, 0x22, 0x41}, // K
+    {0x7f, 0x40, 0x40, 0x40, 0x40}, // L
+    {0x7f, 0x02, 0x0c, 0x02, 0x7f}, // M
+    {0x7f, 0x04, 0x08, 0x10, 0x7f}, // N
+    {0x3e, 0x41, 0x41, 0x41, 0x3e}, // O
+    {0x7f, 0x09, 0x09, 0x09, 0x06}, // P
+    {0x3e, 0x41, 0x51, 0x21, 0x5e}, // Q
+    {0x7f, 0x09, 0x19, 0x29, 0x46}, // R
+    {0x46, 0x49, 0x49, 0x49, 0x31}, // S
+    {0x01, 0x01, 0x7f, 0x01, 0x01}, // T
+    {0x3f, 0x40, 0x40, 0x40, 0x3f}, // U
+    {0x1f, 0x20, 0x40, 0x20, 0x1f}, // V
+    {0x3f, 0x40, 0x38, 0x40, 0x3f}, // W
+    {0x63, 0x14, 0x08, 0x14, 0x63}, // X
+    {0x07, 0x08, 0x70, 0x08, 0x07}, // Y
+    {0x61, 0x51, 0x49, 0x45, 0x43}, // Z
+    {0x00, 0x7f, 0x41, 0x41, 0x00}, // [
+    {0x02, 0x04, 0x08, 0x10, 0x20}, // \
+    {0x00, 0x41, 0x41, 0x7f, 0x00}, // ]
+    {0x04, 0x02, 0x01, 0x02, 0x04}, // ^
+    {0x40, 0x40, 0x40, 0x40, 0x40}, // _
+    {0x00, 0x01, 0x02, 0x04, 0x00}, // `
+    {0x20, 0x54, 0x54, 0x54, 0x78}, // a
+    {0x7f, 0x48, 0x44, 0x44, 0x38}, // b
+    {0x38, 0x44, 0x44, 0x44, 0x20}, // c
+    {0x38, 0x44, 0x44, 0x48, 0x7f}, // d
+    {0x38, 0x54, 0x54, 0x54, 0x18}, // e
+    {0x08, 0x7e, 0x09, 0x01, 0x02}, // f
+    {0x0c, 0x52, 0x52, 0x52, 0x3e}, // g
+    {0x7f, 0x08, 0x04, 0x04, 0x78}, // h
+    {0x00, 0x44, 0x7d, 0x40, 0x00}, // i
+    {0x20, 0x40, 0x44, 0x3d, 0x00}, // j
+    {0x7f, 0x10, 0x28, 0x44, 0x00}, // k
+    {0x00, 0x41, 0x7f, 0x40, 0x00}, // l
+    {0x7c, 0x04, 0x18, 0x04, 0x78}, // m
+    {0x7c, 0x08, 0x04, 0x04, 0x78}, // n
+    {0x38, 0x44, 0x44, 0x44, 0x38}, // o
+    {0x7c, 0x14, 0x14, 0x14, 0x08}, // p
+    {0x08, 0x14, 0x14, 0x18, 0x7c}, // q
+    {0x7c, 0x08, 0x04, 0x04, 0x08}, // r
+    {0x48, 0x54, 0x54, 0x54, 0x20}, // s
+    {0x04, 0x3f, 0x44, 0x40, 0x20}, // t
+    {0x3c, 0x40, 0x40, 0x20, 0x7c}, // u
+    {0x1c, 0x20, 0x40, 0x20, 0x1c}, // v
+    {0x3c, 0x40, 0x30, 0x40, 0x3c}, // w
+    {0x44, 0x28, 0x10, 0x28, 0x44}, // x
+    {0x0c, 0x50, 0x50, 0x50, 0x3c}, // y
+    {0x44, 0x64, 0x54, 0x4c, 0x44}, // z
+    {0x08, 0x36, 0x41, 0x41, 0x00}, // {
+    {0x00, 0x00, 0x77, 0x00, 0x00}, // |
+    {0x00, 0x41, 0x41, 0x36, 0x08}, // }
+    {0x08, 0x08, 0x2a, 0x1c, 0x08}  // ~
+};
+
+/**
+ * @brief Sends a command byte directly to the SSD1306 controller
+ * @details The control byte 0x00 indicates that the following byte is a command.
+ */
 static HAL_StatusTypeDef I2CDisplay_SendCommand(I2CDisplay_Typedef *display, uint8_t command)
 {
-    return HAL_I2C_Master_Transmit(display->hi2c, display->slave_address, &command, 1, HAL_MAX_DELAY);
+    uint8_t payload[2];
+    payload[0] = 0x00; // Co = 0, D/C# = 0 (Command control byte)
+    payload[1] = command;
+
+    return HAL_I2C_Master_Transmit(display->hi2c, display->slave_address, payload, 2, HAL_MAX_DELAY);
 }
 
-void I2CDisplay_Init(I2CDisplay_Typedef *display, I2C_HandleTypeDef *hi2c, uint8_t slave_address)
+static HAL_StatusTypeDef I2CDisplay_SendData(I2CDisplay_Typedef *display, uint8_t data)
 {
-    display->hi2c = hi2c;
-    display->slave_address = slave_address;
+    uint8_t payload[2];
+    payload[0] = 0x40; // Co = 0, D/C# = 1 (Data control byte)
+    payload[1] = data;
 
-    (void)I2CDisplay_SendCommand(display, 0x00);
+    return HAL_I2C_Master_Transmit(display->hi2c, display->slave_address, payload, 2, HAL_MAX_DELAY);
 }
 
-HAL_StatusTypeDef I2CDisplay_WriteString(I2CDisplay_Typedef *display, const char *text)
+HAL_StatusTypeDef I2CDisplay_Init(I2CDisplay_Typedef *display, I2C_HandleTypeDef *hi2c, uint8_t slave_address)
 {
-    if (text == NULL)
+    HAL_StatusTypeDef status;
+
+    if ((display == NULL) || (hi2c == NULL))
     {
         return HAL_ERROR;
     }
 
-    return HAL_I2C_Master_Transmit(display->hi2c, display->slave_address, (uint8_t *)text, (uint16_t)strlen(text), HAL_MAX_DELAY);
+    display->hi2c = hi2c;
+    display->slave_address = slave_address;
+
+    HAL_Delay(100);
+
+    status = I2CDisplay_SendCommand(display, 0xAE);
+    if (status != HAL_OK) return status;
+
+    status = I2CDisplay_SendCommand(display, 0x20);
+    if (status != HAL_OK) return status;
+
+    status = I2CDisplay_SendCommand(display, 0x02);
+    if (status != HAL_OK) return status;
+
+    status = I2CDisplay_SendCommand(display, 0xB0);
+    if (status != HAL_OK) return status;
+
+    status = I2CDisplay_SendCommand(display, 0xC8);
+    if (status != HAL_OK) return status;
+
+    status = I2CDisplay_SendCommand(display, 0x00);
+    if (status != HAL_OK) return status;
+
+    status = I2CDisplay_SendCommand(display, 0x10);
+    if (status != HAL_OK) return status;
+
+    status = I2CDisplay_SendCommand(display, 0x40);
+    if (status != HAL_OK) return status;
+
+    status = I2CDisplay_SendCommand(display, 0x81);
+    if (status != HAL_OK) return status;
+
+    status = I2CDisplay_SendCommand(display, 0x7F);
+    if (status != HAL_OK) return status;
+
+    status = I2CDisplay_SendCommand(display, 0xA1);
+    if (status != HAL_OK) return status;
+
+    status = I2CDisplay_SendCommand(display, 0xA6);
+    if (status != HAL_OK) return status;
+
+    status = I2CDisplay_SendCommand(display, 0xA8);
+    if (status != HAL_OK) return status;
+
+    status = I2CDisplay_SendCommand(display, 0x3F);
+    if (status != HAL_OK) return status;
+
+    status = I2CDisplay_SendCommand(display, 0xA4);
+    if (status != HAL_OK) return status;
+
+    status = I2CDisplay_SendCommand(display, 0xD3);
+    if (status != HAL_OK) return status;
+
+    status = I2CDisplay_SendCommand(display, 0x00);
+    if (status != HAL_OK) return status;
+
+    status = I2CDisplay_SendCommand(display, 0xD5);
+    if (status != HAL_OK) return status;
+
+    status = I2CDisplay_SendCommand(display, 0x80);
+    if (status != HAL_OK) return status;
+
+    status = I2CDisplay_SendCommand(display, 0xD9);
+    if (status != HAL_OK) return status;
+
+    status = I2CDisplay_SendCommand(display, 0x22);
+    if (status != HAL_OK) return status;
+
+    status = I2CDisplay_SendCommand(display, 0xDA);
+    if (status != HAL_OK) return status;
+
+    status = I2CDisplay_SendCommand(display, 0x12);
+    if (status != HAL_OK) return status;
+
+    status = I2CDisplay_SendCommand(display, 0xDB);
+    if (status != HAL_OK) return status;
+
+    status = I2CDisplay_SendCommand(display, 0x20);
+    if (status != HAL_OK) return status;
+
+    status = I2CDisplay_SendCommand(display, 0x8D);
+    if (status != HAL_OK) return status;
+
+    status = I2CDisplay_SendCommand(display, 0x14);
+    if (status != HAL_OK) return status;
+
+    status = I2CDisplay_SendCommand(display, 0xAF);
+    if (status != HAL_OK) return status;
+
+    return I2CDisplay_Clear(display);
 }
 
+HAL_StatusTypeDef I2CDisplay_WriteString(I2CDisplay_Typedef *display, const char *text)
+{
+    size_t length;
+    HAL_StatusTypeDef status = HAL_OK;
+
+    if ((display == NULL) || (text == NULL))
+    {
+        return HAL_ERROR;
+    }
+
+    length = strlen(text);
+
+    for (size_t i = 0; i < length; i++)
+    {
+        char c = text[i];
+
+        if ((c < 32) || (c > 126))
+        {
+            c = ' ';
+        }
+
+        uint8_t font_index = (uint8_t)(c - 32);
+
+        for (uint8_t col = 0; col < 5; col++)
+        {
+            status = I2CDisplay_SendData(display, Font5x7[font_index][col]);
+            if (status != HAL_OK)
+            {
+                return status;
+            }
+        }
+
+        status = I2CDisplay_SendData(display, 0x00);
+        if (status != HAL_OK)
+        {
+            return status;
+        }
+    }
+
+    return status;
+}
+
+/**
+ * @brief Navigates the cursor to a specific line (page) and writes text
+ * @param line The row offset (0 to 7 represents horizontal pages on SSD1306)
+ * @param text The ASCII string to display
+ */
 HAL_StatusTypeDef I2CDisplay_WriteLine(I2CDisplay_Typedef *display, uint8_t line, const char *text)
 {
-    (void)line;
+    HAL_StatusTypeDef status;
+
+    if (line > 7)
+    {
+        return HAL_ERROR;
+    }
+
+    if ((display == NULL) || (text == NULL))
+    {
+        return HAL_ERROR;
+    }
+
+    status = I2CDisplay_SendCommand(display, 0x00);
+    if (status != HAL_OK) return status;
+
+    status = I2CDisplay_SendCommand(display, 0x10);
+    if (status != HAL_OK) return status;
+
+    status = I2CDisplay_SendCommand(display, 0xB0 + line);
+    if (status != HAL_OK) return status;
+
     return I2CDisplay_WriteString(display, text);
 }
 
-void I2CDisplay_Clear(I2CDisplay_Typedef *display)
+HAL_StatusTypeDef I2CDisplay_Clear(I2CDisplay_Typedef *display)
 {
-    (void)display;
+    HAL_StatusTypeDef status;
+
+    if (display == NULL)
+    {
+        return HAL_ERROR;
+    }
+
+    for (uint8_t page = 0; page < 8; page++)
+    {
+        status = I2CDisplay_SendCommand(display, 0xB0 + page);
+        if (status != HAL_OK) return status;
+
+        status = I2CDisplay_SendCommand(display, 0x00);
+        if (status != HAL_OK) return status;
+
+        status = I2CDisplay_SendCommand(display, 0x10);
+        if (status != HAL_OK) return status;
+
+        for (uint8_t col = 0; col < 128; col++)
+        {
+            status = I2CDisplay_SendData(display, 0x00);
+            if (status != HAL_OK) return status;
+        }
+    }
+
+    return HAL_OK;
 }
