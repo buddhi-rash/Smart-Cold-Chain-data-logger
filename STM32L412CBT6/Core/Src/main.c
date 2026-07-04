@@ -19,11 +19,9 @@
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
 
-
-
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include <math.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -44,35 +42,30 @@
 /* Private variables ---------------------------------------------------------*/
 I2C_HandleTypeDef hi2c1;
 
-SPI_HandleTypeDef hspi1;
-
 /* USER CODE BEGIN PV */
-/* Global variables for VS Code Live Watch */
+float SHT45_Temperature = 0.0f;
+float SHT45_Humidity = 0.0f;
 
-// SHT45 Data
-float live_sht45_temp = 0.0f;
-float live_sht45_humidity = 0.0f;
+int16_t LIS3DH_X = 0;
+int16_t LIS3DH_Y = 0;
+int16_t LIS3DH_Z = 0;
 
-// LIS3DHTR Data
-int16_t live_lis3dh_x = 0;
-int16_t live_lis3dh_y = 0;
-int16_t live_lis3dh_z = 0;
+float OPT3001_Lux = 0.0f;
 
-// OPT3001 Data
-float live_opt3001_lux = 0.0f;
-
-// MAX31865 Data
-float live_max31865_res = 0.0f;
-
+#define SHT45_ADDR     (0x44 << 1)
+#define LIS3DH_ADDR    (0x18 << 1)
+#define OPT3001_ADDR   (0x45 << 1)
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_I2C1_Init(void);
-static void MX_SPI1_Init(void);
 /* USER CODE BEGIN PFP */
-
+void LIS3DHTR_Init(void);
+void Read_SHT45(void);
+void Read_LIS3DHTR(void);
+void Read_OPT3001(void);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -110,92 +103,18 @@ int main(void)
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
   MX_I2C1_Init();
-  MX_SPI1_Init();
-  
-/* USER CODE BEGIN 2 */
-  
-  // 1. Initialize MAX31865 over SPI (Bias ON, Auto conversion, 3-wire/2-wire setup)
-  // Ensure GPIOA and PIN_4 match your hardware setup for SPI Chip Select (CS)
-  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4, GPIO_PIN_RESET); // Pull CS Low
-  uint8_t spi_init_buf[2] = {0x00 | 0x80, 0xC2};        // Write 0xC2 to Config Register (0x00)
-  HAL_SPI_Transmit(&hspi1, spi_init_buf, 2, HAL_MAX_DELAY);
-  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4, GPIO_PIN_SET);   // Pull CS High
-
-  // 2. Initialize LIS3DHTR (Enable X,Y,Z axes, 100Hz Normal power mode)
-  // 0x19 << 1 = 0x32
-  uint8_t lis_init[2] = {0x20, 0x57}; // Register 0x20 (CTRL_REG1) -> Value 0x57
-  HAL_I2C_Master_Transmit(&hi2c1, 0x32, lis_init, 2, HAL_MAX_DELAY);
-
+  /* USER CODE BEGIN 2 */
+  LIS3DHTR_Init();
   /* USER CODE END 2 */
 
-/* INFINITE LOOP */
+  /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-      // ==========================================
-      // 1. READ SHT45 (Temperature & Humidity)
-      // ==========================================
-      uint8_t sht_cmd = 0xFD; // High precision command
-      uint8_t sht_rx[6];
-      // 0x44 << 1 = 0x88
-      if(HAL_I2C_Master_Transmit(&hi2c1, 0x88, &sht_cmd, 1, HAL_MAX_DELAY) == HAL_OK) {
-          HAL_Delay(10); // Wait for conversion to complete
-          if(HAL_I2C_Master_Receive(&hi2c1, 0x88, sht_rx, 6, HAL_MAX_DELAY) == HAL_OK) {
-              uint16_t t_ticks = (sht_rx[0] << 8) | sht_rx[1];
-              uint16_t rh_ticks = (sht_rx[3] << 8) | sht_rx[4];
-              
-              live_sht45_temp = -45.0f + 175.0f * (float)t_ticks / 65535.0f;
-              live_sht45_humidity = -6.0f + 125.0f * (float)rh_ticks / 65535.0f;
-          }
-      }
-
-      // ==========================================
-      // 2. READ LIS3DHTR (Accelerometer Axes)
-      // ==========================================
-      uint8_t lis_reg = 0x28 | 0x80; // OUT_X_L register address with auto-increment bit
-      uint8_t lis_rx[6];
-      // 0x19 << 1 = 0x32
-      if(HAL_I2C_Master_Transmit(&hi2c1, 0x32, &lis_reg, 1, HAL_MAX_DELAY) == HAL_OK) {
-          if(HAL_I2C_Master_Receive(&hi2c1, 0x32, lis_rx, 6, HAL_MAX_DELAY) == HAL_OK) {
-              live_lis3dh_x = ((int16_t)(lis_rx[1] << 8 | lis_rx[0])) >> 4;
-              live_lis3dh_y = ((int16_t)(lis_rx[3] << 8 | lis_rx[2])) >> 4;
-              live_lis3dh_z = ((int16_t)(lis_rx[5] << 8 | lis_rx[4])) >> 4;
-          }
-      }
-
-      // ==========================================
-      // 3. READ OPT3001 (Ambient Light Intensity)
-      // ==========================================
-      uint8_t opt_reg = 0x00; // Result register address
-      uint8_t opt_rx[2];
-      // 0x45 << 1 = 0x8A
-      if(HAL_I2C_Master_Transmit(&hi2c1, 0x8A, &opt_reg, 1, HAL_MAX_DELAY) == HAL_OK) {
-          if(HAL_I2C_Master_Receive(&hi2c1, 0x8A, opt_rx, 2, HAL_MAX_DELAY) == HAL_OK) {
-              uint16_t result = (opt_rx[0] << 8) | opt_rx[1];
-              uint16_t exponent = (result & 0xF000) >> 12;
-              uint16_t mantissa = (result & 0x0FFF);
-              live_opt3001_lux = 0.01f * (float)(1 << exponent) * (float)mantissa;
-          }
-      }
-
-      // ==========================================
-      // 4. READ MAX31865 (RTD Temperature Probe)
-      // ==========================================
-      uint8_t rtd_reg = 0x01; // RTD MSB address
-      uint8_t rtd_rx[3] = {0}; 
-      
-      HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4, GPIO_PIN_RESET); // CS Low
-      HAL_SPI_Transmit(&hspi1, &rtd_reg, 1, HAL_MAX_DELAY);
-      HAL_SPI_Receive(&hspi1, &rtd_rx[1], 2, HAL_MAX_DELAY);
-      HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4, GPIO_PIN_SET);   // CS High
-
-      uint16_t rtd_raw = (rtd_rx[1] << 8) | rtd_rx[2];
-      if ((rtd_raw & 0x01) == 0) { // If no fault bit is flagged
-          rtd_raw >>= 1;           // Shift out fault bit
-          live_max31865_res = ((float)rtd_raw * 430.0f) / 32768.0f; // Calculation for a 430 Ohm reference resistor
-      }
-
-      HAL_Delay(250);
+    Read_SHT45();
+    Read_LIS3DHTR();
+    Read_OPT3001();
+    HAL_Delay(500); // Delay 1 second between readings
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -222,13 +141,11 @@ void SystemClock_Config(void)
   /** Initializes the RCC Oscillators according to the specified parameters
   * in the RCC_OscInitTypeDef structure.
   */
-  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE|RCC_OSCILLATORTYPE_MSI;
-  RCC_OscInitStruct.HSEState = RCC_HSE_ON;
-  RCC_OscInitStruct.MSIState = RCC_MSI_ON;
-  RCC_OscInitStruct.MSICalibrationValue = 0;
-  RCC_OscInitStruct.MSIClockRange = RCC_MSIRANGE_11;
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI;
+  RCC_OscInitStruct.HSIState = RCC_HSI_ON;
+  RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
   RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
-  RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
+  RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSI;
   RCC_OscInitStruct.PLL.PLLM = 1;
   RCC_OscInitStruct.PLL.PLLN = 8;
   RCC_OscInitStruct.PLL.PLLQ = RCC_PLLQ_DIV2;
@@ -247,7 +164,7 @@ void SystemClock_Config(void)
   RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV1;
   RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;
 
-  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_1) != HAL_OK)
+  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_3) != HAL_OK)
   {
     Error_Handler();
   }
@@ -269,7 +186,7 @@ static void MX_I2C1_Init(void)
 
   /* USER CODE END I2C1_Init 1 */
   hi2c1.Instance = I2C1;
-  hi2c1.Init.Timing = 0x00B07CB4;
+  hi2c1.Init.Timing = 0x10B17DB5;
   hi2c1.Init.OwnAddress1 = 0;
   hi2c1.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
   hi2c1.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
@@ -302,70 +219,20 @@ static void MX_I2C1_Init(void)
 }
 
 /**
-  * @brief SPI1 Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_SPI1_Init(void)
-{
-
-  /* USER CODE BEGIN SPI1_Init 0 */
-
-  /* USER CODE END SPI1_Init 0 */
-
-  /* USER CODE BEGIN SPI1_Init 1 */
-
-  /* USER CODE END SPI1_Init 1 */
-  /* SPI1 parameter configuration*/
-  hspi1.Instance = SPI1;
-  hspi1.Init.Mode = SPI_MODE_MASTER;
-  hspi1.Init.Direction = SPI_DIRECTION_2LINES;
-  hspi1.Init.DataSize = SPI_DATASIZE_4BIT;
-  hspi1.Init.CLKPolarity = SPI_POLARITY_LOW;
-  hspi1.Init.CLKPhase = SPI_PHASE_1EDGE;
-  hspi1.Init.NSS = SPI_NSS_SOFT;
-  hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_2;
-  hspi1.Init.FirstBit = SPI_FIRSTBIT_MSB;
-  hspi1.Init.TIMode = SPI_TIMODE_DISABLE;
-  hspi1.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;
-  hspi1.Init.CRCPolynomial = 7;
-  hspi1.Init.CRCLength = SPI_CRC_LENGTH_DATASIZE;
-  hspi1.Init.NSSPMode = SPI_NSS_PULSE_ENABLE;
-  if (HAL_SPI_Init(&hspi1) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  /* USER CODE BEGIN SPI1_Init 2 */
-
-  /* USER CODE END SPI1_Init 2 */
-
-}
-
-/**
   * @brief GPIO Initialization Function
   * @param None
   * @retval None
   */
 static void MX_GPIO_Init(void)
 {
-  GPIO_InitTypeDef GPIO_InitStruct = {0};
   /* USER CODE BEGIN MX_GPIO_Init_1 */
 
   /* USER CODE END MX_GPIO_Init_1 */
 
   /* GPIO Ports Clock Enable */
-  __HAL_RCC_GPIOH_CLK_ENABLE();
+  __HAL_RCC_GPIOC_CLK_ENABLE();
   __HAL_RCC_GPIOA_CLK_ENABLE();
-
-  /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_1, GPIO_PIN_RESET);
-
-  /*Configure GPIO pin : PA1 */
-  GPIO_InitStruct.Pin = GPIO_PIN_1;
-  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+  __HAL_RCC_GPIOB_CLK_ENABLE();
 
   /* USER CODE BEGIN MX_GPIO_Init_2 */
 
@@ -373,6 +240,87 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+/**
+  * @brief Initializes LIS3DHTR: Sets power mode to Normal (100 Hz), enables all axes.
+  */
+void LIS3DHTR_Init(void)
+{
+    uint8_t config[2]= {0x20, 0x5F};
+    // CTRL_REG1 (0x20) -> Value 0x57 (100Hz data rate, Normal power mode, X/Y/Z enabled)
+    HAL_I2C_Master_Transmit(&hi2c1, LIS3DH_ADDR, config, 2, HAL_MAX_DELAY);
+}
+
+/**
+  * @brief Reads and parses Temperature and Humidity from SHT45
+  */
+void Read_SHT45(void)
+{
+    uint8_t cmd = 0xFD; // High precision measurement command
+    uint8_t data[6] = {0};
+
+    // Send measurement command
+    if (HAL_I2C_Master_Transmit(&hi2c1, SHT45_ADDR, &cmd, 1, HAL_MAX_DELAY) == HAL_OK)
+    {
+        HAL_Delay(10); // Wait for measurement to complete (~max 8.3ms)
+        
+        // Read 6 bytes (2B Temp + 1B CRC + 2B Humidity + 1B CRC)
+        if (HAL_I2C_Master_Receive(&hi2c1, SHT45_ADDR, data, 6, HAL_MAX_DELAY) == HAL_OK)
+        {
+            uint16_t t_ticks = (data[0] << 8) | data[1];
+            uint16_t rh_ticks = (data[3] << 8) | data[4];
+
+            // Formulas provided by Sensirion datasheet
+            SHT45_Temperature = -45.0f + 175.0f * ((float)t_ticks / 65535.0f);
+            SHT45_Humidity = -6.0f + 125.0f * ((float)rh_ticks / 65535.0f);
+            
+
+        }
+    }
+}
+
+/**
+  * @brief Reads X, Y, and Z raw data from LIS3DHTR
+  */
+void Read_LIS3DHTR(void)
+{
+    uint8_t reg = 0x28 | 0x80; // OUT_X_L register address. Bit 7 set to 1 for auto-increment.
+    uint8_t data[6] = {0};
+
+    if (HAL_I2C_Master_Transmit(&hi2c1, LIS3DH_ADDR, &reg, 1, HAL_MAX_DELAY) == HAL_OK)
+    {
+        if (HAL_I2C_Master_Receive(&hi2c1, LIS3DH_ADDR, data, 6, HAL_MAX_DELAY) == HAL_OK)
+        {
+            // Combine Low and High bytes for each axis
+            LIS3DH_X = ((int16_t)((data[1] << 8) | data[0]))>> 8;
+            LIS3DH_Y = ((int16_t)((data[3] << 8) | data[2]))>> 8;
+            LIS3DH_Z = ((int16_t)((data[5] << 8) | data[4]))>> 8;
+        }
+    }
+}
+
+/**
+  * @brief Reads and decodes Light Intensity (Lux) from OPT3001
+  */
+void Read_OPT3001(void)
+{
+    uint8_t reg = 0x00; // Result Register address
+    uint8_t data[2] = {0};
+
+    if (HAL_I2C_Master_Transmit(&hi2c1, OPT3001_ADDR, &reg, 1, HAL_MAX_DELAY) == HAL_OK)
+    {
+        if (HAL_I2C_Master_Receive(&hi2c1, OPT3001_ADDR, data, 2, HAL_MAX_DELAY) == HAL_OK)
+        {
+            uint16_t raw_reg = (data[0] << 8) | data[1];
+            
+            // OPT3001 Result layout: [4-bit Exponent][12-bit Mantissa]
+            uint8_t exponent = (raw_reg >> 12) & 0x0F;
+            uint16_t mantissa = raw_reg & 0x0FFF;
+
+            // Lux calculation formula from TI datasheet
+            OPT3001_Lux = 0.01f * (float)(1 << exponent) * (float)mantissa;
+        }
+    }
+}
 
 /* USER CODE END 4 */
 
