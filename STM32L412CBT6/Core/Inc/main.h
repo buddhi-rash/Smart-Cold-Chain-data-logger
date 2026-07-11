@@ -65,8 +65,14 @@ void Error_Handler(void);
 #define IMU_int_GPIO_Port GPIOB
 #define Light_int_Pin GPIO_PIN_2
 #define Light_int_GPIO_Port GPIOB
+#define User_UP_Pin GPIO_PIN_14
+#define User_UP_GPIO_Port GPIOB
+#define User_DOWN_Pin GPIO_PIN_15
+#define User_DOWN_GPIO_Port GPIOB
 #define MAX_CS_Pin GPIO_PIN_8
 #define MAX_CS_GPIO_Port GPIOA
+#define Menu_Pin GPIO_PIN_9
+#define Menu_GPIO_Port GPIOB
 
 /* USER CODE BEGIN Private defines */
 

@@ -24,6 +24,8 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "Sensors.h"
+#include "ssd1306.h"
+#include "ssd1306_fonts.h"
 #include <stdio.h>
 #include <string.h>
 /* USER CODE END Includes */
@@ -72,6 +74,47 @@ FIL fil;            // The File Object
 UINT bytesWritten;  // Counter for bytes written
 
 char log_buffer[128];
+
+//Display variables
+// ==========================================
+// UI GLOBAL VARIABLES
+// ==========================================
+int Logging_interval = 25;
+int Uploading_Interval = 100;
+int alarm_enable = 1;
+
+int battery_percent = 100;           // Battery percentage (0-100)
+char time_str[16] = "00:00:00";     // String to hold RTC time for OLED
+
+typedef enum {
+    UI_STATE_HOME,    // Main dashboard display
+    UI_STATE_MENU,    // Scrolling through settings list
+    UI_STATE_EDIT     // Tweaking a specific setting
+} UI_State_t;
+
+typedef struct {
+    const char* label;   // Text to display on OLED
+    int* target_var;     // Pointer to the actual global variable
+    int min_val;         // Lower limit
+    int max_val;         // Upper limit
+    int step;            // Amount to change per click
+} MenuItem_t;
+
+UI_State_t current_state = UI_STATE_HOME;
+int current_menu_index = 0;
+uint8_t ui_needs_update = 1; 
+
+#define DISPLAY_TIMEOUT_MS 60000U
+uint8_t display_enabled = 1;
+uint32_t last_user_activity_ms = 0;
+uint32_t last_sensor_read_ms = 0; // Timer for our non-blocking 500ms loop
+
+MenuItem_t menu_items[] = {
+    {"Logging Interval",  &Logging_interval, 10,  40,  1}, 
+    {"Uploading Interval",  &Uploading_Interval,        0, 255,  5}, 
+    {"Alarm Switch", &alarm_enable,       0,   1,  1}  
+};
+const int TOTAL_MENU_ITEMS = sizeof(menu_items) / sizeof(MenuItem_t);
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -90,6 +133,11 @@ void W25_Wait_For_Ready(void);
 void W25_Write_Enable(void);
 void W25_Erase_Sector(uint32_t address);
 void W25_Write_Page(uint32_t address, uint8_t* buffer, uint16_t length);
+void Update_Dashboard(void);
+uint8_t Process_UI(void);
+void Display_HomeScreen(void);
+void Display_MenuScreen(void);
+void Display_EditScreen(void);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -218,6 +266,148 @@ void W25_Write_Page(uint32_t address, uint8_t* buffer, uint16_t length)
     
     W25_Wait_For_Ready(); // Wait for the physical write to finish
 }
+
+uint8_t Process_UI(void) {
+    static uint8_t menu_was_pressed = 0;
+    static uint8_t up_was_pressed = 0;
+    static uint8_t down_was_pressed = 0;
+    uint8_t changed = 0;
+
+    uint8_t menu_pressed = (HAL_GPIO_ReadPin(Menu_GPIO_Port, Menu_Pin) == GPIO_PIN_RESET);
+    uint8_t up_pressed   = (HAL_GPIO_ReadPin(User_UP_GPIO_Port, User_UP_Pin) == GPIO_PIN_RESET);
+    uint8_t down_pressed = (HAL_GPIO_ReadPin(User_DOWN_GPIO_Port, User_DOWN_Pin) == GPIO_PIN_RESET);
+
+    // MENU BUTTON LOGIC
+    if (menu_pressed && !menu_was_pressed) { 
+        menu_was_pressed = 1;
+        changed = 1;
+        if (current_state == UI_STATE_HOME) {
+            current_state = UI_STATE_MENU;
+            current_menu_index = 0; 
+        } else if (current_state == UI_STATE_MENU) {
+            current_state = UI_STATE_EDIT;
+        } else if (current_state == UI_STATE_EDIT) {
+            current_state = UI_STATE_MENU;
+        }
+    } else if (!menu_pressed) menu_was_pressed = 0; 
+
+    // UP BUTTON LOGIC
+    if (up_pressed && !up_was_pressed) {
+        up_was_pressed = 1;
+        changed = 1;
+        if (current_state == UI_STATE_MENU) {
+            current_menu_index--;
+            if (current_menu_index < 0) current_menu_index = TOTAL_MENU_ITEMS - 1; 
+        } else if (current_state == UI_STATE_EDIT) {
+            MenuItem_t* active_item = &menu_items[current_menu_index];
+            *(active_item->target_var) += active_item->step;
+            if (*(active_item->target_var) > active_item->max_val) *(active_item->target_var) = active_item->max_val;
+        } else if (current_state == UI_STATE_HOME) {
+            current_state = UI_STATE_MENU;
+            current_menu_index = 0;
+        }
+    } else if (!up_pressed) up_was_pressed = 0;
+
+    // DOWN BUTTON LOGIC
+    if (down_pressed && !down_was_pressed) {
+        down_was_pressed = 1;
+        changed = 1;
+        if (current_state == UI_STATE_MENU) {
+            current_menu_index++;
+            if (current_menu_index >= TOTAL_MENU_ITEMS) {
+                current_state = UI_STATE_HOME;
+                current_menu_index = 0; 
+            }
+        } else if (current_state == UI_STATE_EDIT) {
+            MenuItem_t* active_item = &menu_items[current_menu_index];
+            *(active_item->target_var) -= active_item->step;
+            if (*(active_item->target_var) < active_item->min_val) *(active_item->target_var) = active_item->min_val;
+        } else if (current_state == UI_STATE_HOME) {
+            current_state = UI_STATE_MENU;
+            current_menu_index = 0;
+        }
+    } else if (!down_pressed) down_was_pressed = 0;
+
+    return changed;
+}
+
+void Display_HomeScreen(void)
+{
+  char buf[32];
+  ssd1306_Fill(Black);
+
+  ssd1306_SetCursor(2, 0);
+  ssd1306_WriteString((char*)"Temp", Font_6x8, White);
+
+  // UPDATED TO USE YOUR PT100 VARIABLE
+  snprintf(buf, sizeof(buf), "%.1fC", live_temperature);
+  ssd1306_SetCursor(2, 10);
+  ssd1306_WriteString(buf, Font_16x24, White);
+
+  // UPDATED TO USE YOUR SHT45 VARIABLE
+  snprintf(buf, sizeof(buf), "Hum: %.0f%%", humidity);
+  ssd1306_SetCursor(64, 10);
+  ssd1306_WriteString(buf, Font_7x10, White);
+
+  snprintf(buf, sizeof(buf), "Bat: %d%%", battery_percent);
+  ssd1306_SetCursor(64, 36);
+  ssd1306_WriteString(buf, Font_7x10, White);
+
+  ssd1306_SetCursor(2, 50);
+  ssd1306_WriteString(time_str, Font_7x10, White);
+
+  ssd1306_UpdateScreen();
+}
+
+void Display_MenuScreen(void)
+{
+  char buf[32];
+  ssd1306_Fill(Black);
+  ssd1306_SetCursor(2, 0);
+  ssd1306_WriteString((char*)"SETTINGS", Font_7x10, White);
+  ssd1306_Line(0, 12, 127, 12, White);
+
+  int y_pos = 18;
+  for (int i = 0; i < TOTAL_MENU_ITEMS; i++) {
+    if (i == current_menu_index) {
+      ssd1306_DrawRectangle(0, y_pos - 2, 127, y_pos + 10, White);
+      ssd1306_SetCursor(4, y_pos);
+      snprintf(buf, sizeof(buf), "%s: %d", menu_items[i].label, *(menu_items[i].target_var));
+      ssd1306_WriteString(buf, Font_6x8, Black); 
+    } else {
+      ssd1306_SetCursor(4, y_pos);
+      snprintf(buf, sizeof(buf), "%s: %d", menu_items[i].label, *(menu_items[i].target_var));
+      ssd1306_WriteString(buf, Font_6x8, White);
+    }
+    y_pos += 14;
+  }
+  ssd1306_SetCursor(2, 54);
+  ssd1306_WriteString((char*)"Menu:Select  Dn:Back", Font_6x8, White);
+  ssd1306_UpdateScreen();
+}
+
+void Display_EditScreen(void)
+{
+  char buf[32];
+  ssd1306_Fill(Black);
+  MenuItem_t* active_item = &menu_items[current_menu_index];
+
+  ssd1306_SetCursor(2, 0);
+  ssd1306_WriteString((char*)"EDIT MODE", Font_7x10, White);
+  ssd1306_Line(0, 12, 127, 12, White);
+
+  ssd1306_SetCursor(2, 18);
+  ssd1306_WriteString((char*)active_item->label, Font_11x18, White);
+
+  snprintf(buf, sizeof(buf), "%d", *(active_item->target_var));
+  ssd1306_SetCursor(2, 40);
+  ssd1306_WriteString(buf, Font_16x24, White);
+
+  snprintf(buf, sizeof(buf), "Range: %d-%d  Menu:Back", active_item->min_val, active_item->max_val);
+  ssd1306_SetCursor(2, 54);
+  ssd1306_WriteString(buf, Font_6x8, White);
+  ssd1306_UpdateScreen();
+}
 /* USER CODE END 0 */
 
 /**
@@ -260,6 +450,19 @@ int main(void)
   
   // Ask the chip who it is!
   W25_Read_ID();
+
+  ssd1306_Init();
+  // Show a quick boot screen
+  ssd1306_Fill(Black);
+  ssd1306_SetCursor(10, 20);
+  ssd1306_WriteString("Cold Chain", Font_11x18, White);
+  ssd1306_SetCursor(25, 40);
+  ssd1306_WriteString("Logger V1", Font_7x10, White);
+  ssd1306_UpdateScreen();
+
+  HAL_Delay(2000); // Show the boot screen for 2 seconds
+  ssd1306_Fill(Black);
+
 
   MAX31865_Init(); // Initialize the MAX31865 for PT100 readings
   LIS3DHTR_Init(); // Initialize the LIS3DHTR for accelerometer readings
@@ -308,36 +511,86 @@ int main(void)
   while (1)
   {
     /* USER CODE END WHILE */
-    MAX31865_ReadRTD(); // Read the RTD and update the live_temperature variable
-    SHT45_Read(); // Read the SHT45 and update the temperature and humidity variables
-    LIS3DHTR_Read(&LIS3DH_X, &LIS3DH_Y, &LIS3DH_Z);
-    HAL_Delay(500); // Delay for 0.5 second before the next reading
+    uint32_t current_time_ms = HAL_GetTick();
 
+    // ---------------------------------------------------------
+    // TASK 1: FAST POLLING (10ms) - Check buttons
+    // ---------------------------------------------------------
+    uint8_t user_activity = Process_UI();
+    if (user_activity) {
+        if (!display_enabled) {
+            ssd1306_SetDisplayOn(1);
+            display_enabled = 1;
+        }
+        last_user_activity_ms = current_time_ms;
+        ui_needs_update = 1;  
+    }
 
-    /*// 2. Read the RTC Time and Date (MUST read Time first!)
-      RTC_TimeTypeDef sTime = {0};
-      RTC_DateTypeDef sDate = {0};
-      HAL_RTC_GetTime(&hrtc, &sTime, RTC_FORMAT_BIN);
-      HAL_RTC_GetDate(&hrtc, &sDate, RTC_FORMAT_BIN);
+    // ---------------------------------------------------------
+    // TASK 2: SLOW POLLING (500ms) - Read Sensors & Save CSV
+    // ---------------------------------------------------------
+    if ((current_time_ms - last_sensor_read_ms) >= 500) 
+    {
+        last_sensor_read_ms = current_time_ms;
 
-      // 3. Format all data into a single CSV string
-      // snprintf safely converts our floats and integers into text
-      snprintf(log_buffer, sizeof(log_buffer), "20%02d-%02d-%02d,%02d:%02d:%02d,%.2f,%.2f,%d,%d,%d\n",
-               sDate.Year, sDate.Month, sDate.Date,
-               sTime.Hours, sTime.Minutes, sTime.Seconds,
-               live_temperature, humidity, LIS3DH_X, LIS3DH_Y, LIS3DH_Z);
+        // 1. Read Sensors
+        MAX31865_ReadRTD(); 
+        SHT45_Read(); 
+        LIS3DHTR_Read(&LIS3DH_X, &LIS3DH_Y, &LIS3DH_Z);
 
-      // 4. Open the file, move to the bottom, write the row, and close
-      if(f_open(&fil, "data.csv", FA_OPEN_ALWAYS | FA_WRITE) == FR_OK)
-      {
-          f_lseek(&fil, f_size(&fil)); // Go to the very end of the file
-          f_write(&fil, log_buffer, strlen(log_buffer), &bytesWritten);
-          f_close(&fil);
-      }*/
+        // 2. Read RTC Time
+        RTC_TimeTypeDef sTime = {0};
+        RTC_DateTypeDef sDate = {0};
+        HAL_RTC_GetTime(&hrtc, &sTime, RTC_FORMAT_BIN);
+        HAL_RTC_GetDate(&hrtc, &sDate, RTC_FORMAT_BIN);
+
+        // Format the time string for the OLED home screen
+        snprintf(time_str, sizeof(time_str), "%02d:%02d:%02d", sTime.Hours, sTime.Minutes, sTime.Seconds);
+
+        // 3. Save to Flash CSV
+        snprintf(log_buffer, sizeof(log_buffer), "20%02d-%02d-%02d,%02d:%02d:%02d,%.2f,%.2f,%d,%d,%d\n",
+                  sDate.Year, sDate.Month, sDate.Date,
+                  sTime.Hours, sTime.Minutes, sTime.Seconds,
+                  live_temperature, humidity, LIS3DH_X, LIS3DH_Y, LIS3DH_Z);
+
+        /*if(f_open(&fil, "data.csv", FA_OPEN_ALWAYS | FA_WRITE) == FR_OK) {
+            f_lseek(&fil, f_size(&fil));
+            f_write(&fil, log_buffer, strlen(log_buffer), &bytesWritten);
+            f_close(&fil);
+        }*/
+
+        // Force a screen redraw so the new temp/time shows up
+        if (current_state == UI_STATE_HOME) ui_needs_update = 1; 
+    }
+
+    // ---------------------------------------------------------
+    // TASK 3: UPDATE DISPLAY
+    // ---------------------------------------------------------
+    if (display_enabled && ui_needs_update) 
+    {
+        if (current_state == UI_STATE_HOME) {
+            Display_HomeScreen();
+        } else if (current_state == UI_STATE_MENU) {
+            Display_MenuScreen();
+        } else if (current_state == UI_STATE_EDIT) {
+            Display_EditScreen();
+        }
+        ui_needs_update = 0;
+    }
+
+    // Screen Timeout Check
+    if (display_enabled && ((current_time_ms - last_user_activity_ms) >= DISPLAY_TIMEOUT_MS)) {
+        ssd1306_SetDisplayOn(0);
+        display_enabled = 0;
+    }
+
+    HAL_Delay(10); // Tiny delay to keep button polling responsive
+
     /* USER CODE BEGIN 3 */
   }
-  /* USER CODE END 3 */
+    /* USER CODE BEGIN 3 */
 }
+  /* USER CODE END 3 */
 
 /**
   * @brief System Clock Configuration
@@ -530,14 +783,13 @@ static void MX_RTC_Init(void)
 
   /* USER CODE END Check_RTC_BKUP */
 
-  /** Initialize RTC and set the Time and Date
-  */
+  // Check if the RTC is already ticking by looking for our secret flag (0x32F2)
   if (HAL_RTCEx_BKUPRead(&hrtc, RTC_BKP_DR1) != 0x32F2)
   {
       /** Initialize RTC and set the Time and Date
       */
-      sTime.Hours = 0;      // 12 AM (Midnight) in 24-hour time
-      sTime.Minutes = 8;    // Current minute
+      sTime.Hours = 14;      // 2 PM in 24-hour time
+      sTime.Minutes = 36;    // Current minute
       sTime.Seconds = 0;
       sTime.DayLightSaving = RTC_DAYLIGHTSAVING_NONE;
       sTime.StoreOperation = RTC_STOREOPERATION_RESET;
@@ -638,6 +890,12 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pin = Temp_int_Pin|IMU_int_Pin|Light_int_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
+  /*Configure GPIO pins : User_UP_Pin User_DOWN_Pin Menu_Pin */
+  GPIO_InitStruct.Pin = User_UP_Pin|User_DOWN_Pin|Menu_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_FALLING;
+  GPIO_InitStruct.Pull = GPIO_PULLUP;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
   /* USER CODE BEGIN MX_GPIO_Init_2 */
