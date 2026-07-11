@@ -57,6 +57,16 @@ void Error_Handler(void);
 /* USER CODE END EFP */
 
 /* Private defines -----------------------------------------------------------*/
+#define Storage_CS_Pin GPIO_PIN_4
+#define Storage_CS_GPIO_Port GPIOA
+#define Temp_int_Pin GPIO_PIN_0
+#define Temp_int_GPIO_Port GPIOB
+#define IMU_int_Pin GPIO_PIN_1
+#define IMU_int_GPIO_Port GPIOB
+#define Light_int_Pin GPIO_PIN_2
+#define Light_int_GPIO_Port GPIOB
+#define MAX_CS_Pin GPIO_PIN_8
+#define MAX_CS_GPIO_Port GPIOA
 
 /* USER CODE BEGIN Private defines */
 
