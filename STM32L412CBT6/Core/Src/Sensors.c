@@ -50,9 +50,16 @@ int16_t LIS3DH_Z = 0;
 // Shifts the SPI bus into Mode 3 for the PT100 Sensor
 static void SPI_Set_Mode_MAX31865(void)
 {
-    hspi1.Init.CLKPolarity = SPI_POLARITY_HIGH;
-    hspi1.Init.CLKPhase = SPI_PHASE_2EDGE;
-    HAL_SPI_Init(&hspi1);
+  // 1. Force the Flash CS HIGH so it ignores the bus change
+  HAL_GPIO_WritePin(Storage_CS_GPIO_Port, Storage_CS_Pin, GPIO_PIN_SET);
+    
+  // 2. Completely reset the SPI peripheral to clear locks and errors
+  HAL_SPI_DeInit(&hspi1);
+    
+  // 3. Apply Mode 3 settings
+  hspi1.Init.CLKPolarity = SPI_POLARITY_HIGH;
+  hspi1.Init.CLKPhase = SPI_PHASE_2EDGE;
+  HAL_SPI_Init(&hspi1);
 }
 
 void MAX31865_Init(void)
@@ -90,6 +97,7 @@ uint8_t MAX31865_ReadRegister(uint8_t reg)
 void MAX31865_ReadRTD(void)
 {
   SPI_Set_Mode_MAX31865(); // Ensure SPI is in Mode 3 for the MAX31865
+  dummy = 9.0f; // Optional: Reset dummy variable at the start of the function
   uint8_t tx_data[3] = { REG_RTD_MSB, 0x00, 0x00 };
   uint8_t rx_data[3] = { 0 };
   
@@ -101,20 +109,21 @@ void MAX31865_ReadRTD(void)
   // 3. Trigger 1-Shot conversion by adding the 1-SHOT bit
   config |= CONFIG_1SHOT;
   MAX31865_WriteRegister(REG_CONFIG_WRITE, config);
-  
+  dummy = 9.1f; // Optional: Set a dummy variable to indicate that the 1-shot conversion has been triggered
   // 4. Wait for conversion to complete (~62.5ms for 50Hz single conversion)
   HAL_Delay(65); 
+
   // 5. Read the 2 RTD data bytes sequentially
   MAX_CS_LOW();
   HAL_SPI_TransmitReceive(&hspi1, tx_data, rx_data, 3, HAL_MAX_DELAY);
   MAX_CS_HIGH();
-  
+  dummy = 9.2f; // Optional: Set a dummy variable to indicate that the RTD data has been read
   // 6. Instantly shut off VBIAS to save power
   MAX31865_WriteRegister(REG_CONFIG_WRITE, CONFIG_3WIRE | CONFIG_50HZ);
   
   // 7. Process Data
   uint16_t rtd_raw = (rx_data[1] << 8) | rx_data[2];
-  
+  dummy = 9.3f; // Optional: Set a dummy variable to indicate that the raw RTD data has been processed
   // Check if the Fault flag (D0 of LSB) is set[cite: 1]
   if (rtd_raw & 0x01) 
   {
@@ -125,7 +134,7 @@ void MAX31865_ReadRTD(void)
   }
   
   raw_rtd_code = rtd_raw >> 1; // Shift out the fault status bit to get 15-bit ADC code[cite: 1]
-  
+  dummy = 9.4f; // Optional: Set a dummy variable to indicate that the raw RTD code has been extracted
   // 8. Calculate Resistance[cite: 1]
   R_rtd = ((float)raw_rtd_code * RREF) / 32768.0f; // R_rtd = (ADC_code * Rref) / 2^15[cite: 1]
   
