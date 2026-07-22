@@ -1,6 +1,0 @@
-build/
-Debug/
-*.o
-*.elf
-*.bin
-*.hex
