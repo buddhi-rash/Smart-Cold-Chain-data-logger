@@ -19,6 +19,7 @@
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
 #include "fatfs.h"
+#include "stm32l4xx_hal.h"
 #include "usb_device.h"
 
 /* Private includes ----------------------------------------------------------*/
@@ -28,6 +29,9 @@
 #include "ssd1306_fonts.h"
 #include <stdio.h>
 #include <string.h>
+#include "usbd_core.h"
+#include "GSM.h"
+extern USBD_HandleTypeDef hUsbDeviceFS;
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -43,6 +47,21 @@
 
 #define W25_CS_LOW()  HAL_GPIO_WritePin(Storage_CS_GPIO_Port, Storage_CS_Pin, GPIO_PIN_RESET)
 #define W25_CS_HIGH() HAL_GPIO_WritePin(Storage_CS_GPIO_Port, Storage_CS_Pin, GPIO_PIN_SET)
+
+#define MAX_BUFFERED_READINGS 100 // Adjust based on your available RAM
+typedef struct {
+    uint8_t year;
+    uint8_t month;
+    uint8_t date;
+    uint8_t hours;
+    uint8_t minutes;
+    uint8_t seconds;
+    float temperature;
+    float humidity;
+    int16_t accel_x;
+    int16_t accel_y;
+    int16_t accel_z;
+} SensorRecord_t;
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
@@ -63,11 +82,16 @@ RTC_HandleTypeDef hrtc;
 
 SPI_HandleTypeDef hspi1;
 
+UART_HandleTypeDef huart1;
+
 /* USER CODE BEGIN PV */
 // Array to store the 3 bytes the chip sends back
 uint8_t flash_id[3];
 uint8_t test_read_buffer[10]; // Buffer to hold our read test
 float check = 0.0f; // Variable to hold the floating-point value to be written to the CSV file
+float debug=0.0f; 
+float f_c= 0.0f;
+uint32_t dif_time=0; 
 
 FATFS fs;           // The File System Object
 FIL fil;            // The File Object
@@ -75,15 +99,18 @@ UINT bytesWritten;  // Counter for bytes written
 
 char log_buffer[128];
 
+SensorRecord_t local_record_buffer[MAX_BUFFERED_READINGS];
+uint32_t local_record_count = 0; // Tracks how many readings we have stored
+
 //Display variables
 // ==========================================
 // UI GLOBAL VARIABLES
 // ==========================================
-int Logging_interval = 25;
-int Uploading_Interval = 100;
+int Logging_interval = 30;// Logging interval in seconds (10-40)
+int Uploading_Interval = 120;// Uploading interval in seconds (0-255)
 int alarm_enable = 1;
 
-int battery_percent = 100;           // Battery percentage (0-100)
+int battery_percent = 73;           // Battery percentage (0-100)
 char time_str[16] = "00:00:00";     // String to hold RTC time for OLED
 
 typedef enum {
@@ -108,11 +135,13 @@ uint8_t ui_needs_update = 1;
 uint8_t display_enabled = 1;
 uint32_t last_user_activity_ms = 0;
 uint32_t last_sensor_read_ms = 0; // Timer for our non-blocking 500ms loop
+uint32_t last_upload_ms = 0;
 
 MenuItem_t menu_items[] = {
-    {"Logging Interval",  &Logging_interval, 10,  40,  1}, 
-    {"Uploading Interval",  &Uploading_Interval,        0, 255,  5}, 
-    {"Alarm Switch", &alarm_enable,       0,   1,  1}  
+    // Label                 Pointer               Min   Max    Step
+    {"Logging Interval",    &Logging_interval,     10,   180,   10},  // Range: 10s to 120s (Step by 10s)
+    {"Uploading Interval",  &Uploading_Interval,   60,   3600,  60},  // Range: 60s to 3600s (Step by 1 minute)
+    {"Alarm Switch",        &alarm_enable,         0,    1,     1}  
 };
 const int TOTAL_MENU_ITEMS = sizeof(menu_items) / sizeof(MenuItem_t);
 /* USER CODE END PV */
@@ -124,6 +153,7 @@ static void MX_I2C1_Init(void);
 static void MX_I2C2_Init(void);
 static void MX_RTC_Init(void);
 static void MX_SPI1_Init(void);
+static void MX_USART1_UART_Init(void);
 /* USER CODE BEGIN PFP */
 void SPI_Set_Mode_Flash(void);
 void SPI_Set_Mode_MAX31865(void);
@@ -145,17 +175,55 @@ void Display_EditScreen(void);
 // Shifts the SPI bus into Mode 0 for the Memory Chip
 void SPI_Set_Mode_Flash(void)
 {
-    hspi1.Init.CLKPolarity = SPI_POLARITY_LOW;
-    hspi1.Init.CLKPhase = SPI_PHASE_1EDGE;
-    HAL_SPI_Init(&hspi1);
+// 1. Force the PT100 CS HIGH so it ignores the bus change
+  HAL_GPIO_WritePin(MAX_CS_GPIO_Port, MAX_CS_Pin, GPIO_PIN_SET);
+    
+  // 2. Safely disable the SPI hardware block without breaking GPIOs
+  __HAL_SPI_DISABLE(&hspi1);
+    
+  // 3. Fully restore ALL SPI parameters for Mode 0
+  hspi1.Init.Mode = SPI_MODE_MASTER;
+  hspi1.Init.Direction = SPI_DIRECTION_2LINES;
+  hspi1.Init.DataSize = SPI_DATASIZE_8BIT;
+  hspi1.Init.CLKPolarity = SPI_POLARITY_LOW;         // Mode 0
+  hspi1.Init.CLKPhase = SPI_PHASE_1EDGE;             // Mode 0
+  hspi1.Init.NSS = SPI_NSS_SOFT;
+  hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_16; // Overwrite FatFs changes
+  hspi1.Init.FirstBit = SPI_FIRSTBIT_MSB;
+  hspi1.Init.TIMode = SPI_TIMODE_DISABLE;
+  hspi1.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;
+  hspi1.Init.CRCPolynomial = 7;
+  hspi1.Init.CRCLength = SPI_CRC_LENGTH_DATASIZE;
+  hspi1.Init.NSSPMode = SPI_NSS_PULSE_DISABLE;
+
+  HAL_SPI_Init(&hspi1);
 }
 
 // Shifts the SPI bus into Mode 3 for the PT100 Sensor
 void SPI_Set_Mode_MAX31865(void)
 {
-    hspi1.Init.CLKPolarity = SPI_POLARITY_HIGH;
-    hspi1.Init.CLKPhase = SPI_PHASE_2EDGE;
-    HAL_SPI_Init(&hspi1);
+// 1. Force the Flash CS HIGH so it ignores the bus change
+  HAL_GPIO_WritePin(Storage_CS_GPIO_Port, Storage_CS_Pin, GPIO_PIN_SET);
+    
+  // 2. Safely disable the SPI hardware block without breaking GPIOs
+  __HAL_SPI_DISABLE(&hspi1);
+    
+  // 3. Fully restore ALL SPI parameters for Mode 3
+  hspi1.Init.Mode = SPI_MODE_MASTER;
+  hspi1.Init.Direction = SPI_DIRECTION_2LINES;
+  hspi1.Init.DataSize = SPI_DATASIZE_8BIT;
+  hspi1.Init.CLKPolarity = SPI_POLARITY_HIGH;        // Mode 3
+  hspi1.Init.CLKPhase = SPI_PHASE_2EDGE;             // Mode 3
+  hspi1.Init.NSS = SPI_NSS_SOFT;
+  hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_16; // Guarantee safe clock speed!
+  hspi1.Init.FirstBit = SPI_FIRSTBIT_MSB;
+  hspi1.Init.TIMode = SPI_TIMODE_DISABLE;
+  hspi1.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;
+  hspi1.Init.CRCPolynomial = 7;
+  hspi1.Init.CRCLength = SPI_CRC_LENGTH_DATASIZE;
+  hspi1.Init.NSSPMode = SPI_NSS_PULSE_DISABLE;
+
+  HAL_SPI_Init(&hspi1);
 }
 void W25_Read_ID(void)
 {
@@ -274,8 +342,8 @@ uint8_t Process_UI(void) {
     uint8_t changed = 0;
 
     uint8_t menu_pressed = (HAL_GPIO_ReadPin(Menu_GPIO_Port, Menu_Pin) == GPIO_PIN_RESET);
-    uint8_t up_pressed   = (HAL_GPIO_ReadPin(User_UP_GPIO_Port, User_UP_Pin) == GPIO_PIN_RESET);
-    uint8_t down_pressed = (HAL_GPIO_ReadPin(User_DOWN_GPIO_Port, User_DOWN_Pin) == GPIO_PIN_RESET);
+    uint8_t up_pressed   = (HAL_GPIO_ReadPin(User_DOWN_GPIO_Port, User_DOWN_Pin) == GPIO_PIN_RESET);
+    uint8_t down_pressed = (HAL_GPIO_ReadPin(User_UP_GPIO_Port, User_UP_Pin) == GPIO_PIN_RESET);
 
     // MENU BUTTON LOGIC
     if (menu_pressed && !menu_was_pressed) { 
@@ -345,7 +413,7 @@ void Display_HomeScreen(void)
   ssd1306_WriteString(buf, Font_16x24, White);
 
   // UPDATED TO USE YOUR SHT45 VARIABLE
-  snprintf(buf, sizeof(buf), "Hum: %.0f%%", humidity);
+  snprintf(buf, sizeof(buf), "Hum: %.0f%%", humidity-29.0f);
   ssd1306_SetCursor(64, 10);
   ssd1306_WriteString(buf, Font_7x10, White);
 
@@ -445,8 +513,12 @@ int main(void)
   MX_SPI1_Init();
   MX_FATFS_Init();
   MX_USB_DEVICE_Init();
+  MX_USART1_UART_Init();
   /* USER CODE BEGIN 2 */
   HAL_Delay(100); 
+
+  // Replace &huart1 with your configured cellular UART handle
+  GSM_Init(&huart1);
   
   // Ask the chip who it is!
   W25_Read_ID();
@@ -460,137 +532,194 @@ int main(void)
   ssd1306_WriteString("Logger V1", Font_7x10, White);
   ssd1306_UpdateScreen();
 
+
   HAL_Delay(2000); // Show the boot screen for 2 seconds
   ssd1306_Fill(Black);
 
+  //USBD_DeInit(&hUsbDeviceFS);
 
   MAX31865_Init(); // Initialize the MAX31865 for PT100 readings
+
   LIS3DHTR_Init(); // Initialize the LIS3DHTR for accelerometer readings
-  // 1. Try to Mount the File System
-  /*FRESULT res = f_mount(&fs, USERPath, 1);
+
   
-  // --- NEW AUTO-FORMAT CATCH BLOCK ---
-  if (res == FR_NO_FILESYSTEM) 
-  {
-      // 1. Give FatFs a massive 4KB buffer to ensure it has plenty of working room!
-      BYTE workBuffer[4096]; 
-      
-      // 2. Use '1' (FM_FAT) to explicitly command a standard FAT format
-      res = f_mkfs(USERPath, 1, 0, workBuffer, sizeof(workBuffer));
-      
-      // If the format was successful, try mounting it one more time!
-      if (res == FR_OK) 
-      {
-          res = f_mount(&fs, USERPath, 1);
-      }
-  }
-  // -----------------------------------
-
-  // Update our check variable to see the final result
-  check = (float)res;
-
-  // 2. If it mounted successfully (either immediately or after formatting)
-  if(res == FR_OK) 
-  {
-      HAL_Delay(500); 
-      
-      if(f_open(&fil, "data.csv", FA_OPEN_ALWAYS | FA_WRITE) == FR_OK)
-      {
-          f_lseek(&fil, f_size(&fil));
-          char header[] = "Date,Time,Temperature(C),Humidity(%),Accel_X,Accel_Y,Accel_Z\n";
-          f_write(&fil, header, strlen(header), &bytesWritten);
-          f_close(&fil);
-          
-          check = 99.0f; // 99 means ultimate success!
-      }
-  }*/
+  
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
+  uint8_t was_usb_connected = 0;
   while (1)
   {
-    /* USER CODE END WHILE */
     uint32_t current_time_ms = HAL_GetTick();
+      uint8_t is_usb_connected = (hUsbDeviceFS.dev_state == USBD_STATE_CONFIGURED) ? 1 : 0;
 
-    // ---------------------------------------------------------
-    // TASK 1: FAST POLLING (10ms) - Check buttons
-    // ---------------------------------------------------------
-    uint8_t user_activity = Process_UI();
-    if (user_activity) {
-        if (!display_enabled) {
-            ssd1306_SetDisplayOn(1);
-            display_enabled = 1;
-        }
-        last_user_activity_ms = current_time_ms;
-        ui_needs_update = 1;  
-    }
+      // =========================================================
+      // TRANSITION LOGIC (Cable plugged in)
+      // =========================================================
+      if (is_usb_connected == 1 && was_usb_connected == 0) 
+      {
+          // 1. Alert the User
+          ssd1306_Fill(Black);
+          ssd1306_SetCursor(10, 20);
+          ssd1306_WriteString("USB CONNECTED", Font_11x18, White);
+          ssd1306_SetCursor(10, 40);
+          ssd1306_WriteString("Syncing Data...", Font_7x10, White);
+          ssd1306_UpdateScreen();
+          
+          // 2. Quickly mount FatFs and dump our RAM buffer into the CSV file
+          /*if (f_mount(&fs, USERPath, 1) == FR_OK) 
+          {
+              if (f_open(&fil, "maindata.csv", FA_OPEN_ALWAYS | FA_WRITE) == FR_OK) 
+              {
+                  // ==========================================
+                  // NEW: Check if the file is brand new (size 0)
+                  // ==========================================
+                  if (f_size(&fil) == 0) 
+                  {
+                      // File was just created, write the header!
+                      f_c=0.2f;
+                      char header[] = "Date,Time,Temperature(C),Humidity(%),Accel_X,Accel_Y,Accel_Z\n";
+                      f_write(&fil, header, strlen(header), &bytesWritten);
+                  }
+                  else
+                  {
+                      // File already exists, just jump to the end
+                      f_c=0.1f;
+                      f_lseek(&fil, f_size(&fil)); 
+                  }
 
-    // ---------------------------------------------------------
-    // TASK 2: SLOW POLLING (500ms) - Read Sensors & Save CSV
-    // ---------------------------------------------------------
-    if ((current_time_ms - last_sensor_read_ms) >= 500) 
-    {
-        last_sensor_read_ms = current_time_ms;
+                  // Loop through all saved readings and write them
+                  for (uint32_t i = 0; i < local_record_count; i++) 
+                  {
+                      snprintf(log_buffer, sizeof(log_buffer), "20%02d-%02d-%02d,%02d:%02d:%02d,%.2f,%.2f,%d,%d,%d\n",
+                               local_record_buffer[i].year, local_record_buffer[i].month, local_record_buffer[i].date,
+                               local_record_buffer[i].hours, local_record_buffer[i].minutes, local_record_buffer[i].seconds,
+                               local_record_buffer[i].temperature, local_record_buffer[i].humidity, 
+                               local_record_buffer[i].accel_x, local_record_buffer[i].accel_y, local_record_buffer[i].accel_z);
+                      
+                      f_write(&fil, log_buffer, strlen(log_buffer), &bytesWritten);
+                  }
+                  f_close(&fil);
+              }
+          }*/
 
-        // 1. Read Sensors
-        MAX31865_ReadRTD(); 
-        SHT45_Read(); 
-        LIS3DHTR_Read(&LIS3DH_X, &LIS3DH_Y, &LIS3DH_Z);
+          // 3. Reset the buffer counter since data is now saved
+          local_record_count = 0;
+          
+          // 4. Unmount FatFs safely so the PC can take control of the Flash memory
+          f_mount(NULL, USERPath, 0); 
+          was_usb_connected = 1;
+      }
+      // =========================================================
+      // TRANSITION LOGIC (Cable pulled out)
+      // =========================================================
+      else if (is_usb_connected == 0 && was_usb_connected == 1) 
+      {
+          // Note: We DO NOT mount the file system here. We keep it unmounted 
+          // during battery operation to save power and prevent SPI conflicts.
+          ui_needs_update = 1;       
+          was_usb_connected = 0;
+      }
 
-        // 2. Read RTC Time
-        RTC_TimeTypeDef sTime = {0};
-        RTC_DateTypeDef sDate = {0};
-        HAL_RTC_GetTime(&hrtc, &sTime, RTC_FORMAT_BIN);
-        HAL_RTC_GetDate(&hrtc, &sDate, RTC_FORMAT_BIN);
+      // =========================================================
+      // NORMAL OPERATION (Only runs when running on Battery)
+      // =========================================================
+      if (is_usb_connected == 0) 
+      {
+          debug = 2.0f;
+          uint8_t user_activity = Process_UI();
+          if (user_activity) {
+              if (!display_enabled) {
+                  ssd1306_SetDisplayOn(1);
+                  display_enabled = 1;
+              }
+              last_user_activity_ms = current_time_ms;
+              ui_needs_update = 1;  
+          }
 
-        // Format the time string for the OLED home screen
-        snprintf(time_str, sizeof(time_str), "%02d:%02d:%02d", sTime.Hours, sTime.Minutes, sTime.Seconds);
+          dif_time = current_time_ms - last_sensor_read_ms;
+          if ((current_time_ms - last_sensor_read_ms) >= (Logging_interval * 1000)) 
+          {
+              last_sensor_read_ms = current_time_ms;
+              debug = 1.0f;
+              
+              MAX31865_ReadRTD(); 
+              SHT45_Read(); 
+              LIS3DHTR_Read(&LIS3DH_X, &LIS3DH_Y, &LIS3DH_Z);
+              
+              RTC_TimeTypeDef sTime = {0};
+              RTC_DateTypeDef sDate = {0};
+              HAL_RTC_GetTime(&hrtc, &sTime, RTC_FORMAT_BIN);
+              HAL_RTC_GetDate(&hrtc, &sDate, RTC_FORMAT_BIN);
+              
+              snprintf(time_str, sizeof(time_str), "%02d:%02d:%02d", sTime.Hours, sTime.Minutes, sTime.Seconds);
 
-        // 3. Save to Flash CSV
-        snprintf(log_buffer, sizeof(log_buffer), "20%02d-%02d-%02d,%02d:%02d:%02d,%.2f,%.2f,%d,%d,%d\n",
-                  sDate.Year, sDate.Month, sDate.Date,
-                  sTime.Hours, sTime.Minutes, sTime.Seconds,
-                  live_temperature, humidity, LIS3DH_X, LIS3DH_Y, LIS3DH_Z);
+              // =========================================================
+              // NEW: STORE IN RAM BUFFER INSTEAD OF CSV
+              // =========================================================
+              if (local_record_count < MAX_BUFFERED_READINGS) 
+              {
+                  local_record_buffer[local_record_count].year = sDate.Year;
+                  local_record_buffer[local_record_count].month = sDate.Month;
+                  local_record_buffer[local_record_count].date = sDate.Date;
+                  local_record_buffer[local_record_count].hours = sTime.Hours;
+                  local_record_buffer[local_record_count].minutes = sTime.Minutes;
+                  local_record_buffer[local_record_count].seconds = sTime.Seconds;
+                  local_record_buffer[local_record_count].temperature = live_temperature;
+                  local_record_buffer[local_record_count].humidity = humidity;
+                  local_record_buffer[local_record_count].accel_x = LIS3DH_X;
+                  local_record_buffer[local_record_count].accel_y = LIS3DH_Y;
+                  local_record_buffer[local_record_count].accel_z = LIS3DH_Z;
+                  
+                  local_record_count++;
+              }
+              
+              char date_buffer[16];
+              char time_buffer[16];
+              snprintf(date_buffer, sizeof(date_buffer), "%d/%d/20%02d", sDate.Month, sDate.Date, sDate.Year);
+              snprintf(time_buffer, sizeof(time_buffer), "%02d:%02d:%02d", sTime.Hours, sTime.Minutes, sTime.Seconds);
+              GSM_AddReading(date_buffer, time_buffer, temperature, humidity - 29.0f, LIS3DH_X, LIS3DH_Y, LIS3DH_Z - 63);
 
-        /*if(f_open(&fil, "data.csv", FA_OPEN_ALWAYS | FA_WRITE) == FR_OK) {
-            f_lseek(&fil, f_size(&fil));
-            f_write(&fil, log_buffer, strlen(log_buffer), &bytesWritten);
-            f_close(&fil);
-        }*/
+              if (((current_time_ms - last_upload_ms) >= (Uploading_Interval * 1000)) || 
+                  (GSM_GetBufferCount() >= MAX_READINGS)) 
+              {
+                  last_upload_ms = current_time_ms; 
+                  if (GSM_GetBufferCount() > 0) {
+                      ssd1306_SetCursor(2, 50);
+                      ssd1306_WriteString("Uploading...   ", Font_7x10, White);
+                      ssd1306_UpdateScreen();
+                      GSM_UploadBuffer();
+                  }
+              }
 
-        // Force a screen redraw so the new temp/time shows up
-        if (current_state == UI_STATE_HOME) ui_needs_update = 1; 
-    }
+              if (current_state == UI_STATE_HOME) ui_needs_update = 1; 
+          }
 
-    // ---------------------------------------------------------
-    // TASK 3: UPDATE DISPLAY
-    // ---------------------------------------------------------
-    if (display_enabled && ui_needs_update) 
-    {
-        if (current_state == UI_STATE_HOME) {
-            Display_HomeScreen();
-        } else if (current_state == UI_STATE_MENU) {
-            Display_MenuScreen();
-        } else if (current_state == UI_STATE_EDIT) {
-            Display_EditScreen();
-        }
-        ui_needs_update = 0;
-    }
+          if (display_enabled && ui_needs_update) 
+          {
+              if (current_state == UI_STATE_HOME) Display_HomeScreen();
+              else if (current_state == UI_STATE_MENU) Display_MenuScreen();
+              else if (current_state == UI_STATE_EDIT) Display_EditScreen();
+              ui_needs_update = 0;
+          }
 
-    // Screen Timeout Check
-    if (display_enabled && ((current_time_ms - last_user_activity_ms) >= DISPLAY_TIMEOUT_MS)) {
-        ssd1306_SetDisplayOn(0);
-        display_enabled = 0;
-    }
+          if (display_enabled && ((current_time_ms - last_user_activity_ms) >= DISPLAY_TIMEOUT_MS)) {
+              ssd1306_SetDisplayOn(0);
+              display_enabled = 0;
+          }
+      }
 
-    HAL_Delay(10); // Tiny delay to keep button polling responsive
+      HAL_Delay(10); 
+  
+    /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
   }
     /* USER CODE BEGIN 3 */
 }
   /* USER CODE END 3 */
+
 
 /**
   * @brief System Clock Configuration
@@ -783,36 +912,35 @@ static void MX_RTC_Init(void)
 
   /* USER CODE END Check_RTC_BKUP */
 
-  // Check if the RTC is already ticking by looking for our secret flag (0x32F2)
   if (HAL_RTCEx_BKUPRead(&hrtc, RTC_BKP_DR1) != 0x32F2)
-  {
-      /** Initialize RTC and set the Time and Date
-      */
-      sTime.Hours = 14;      // 2 PM in 24-hour time
-      sTime.Minutes = 36;    // Current minute
-      sTime.Seconds = 0;
-      sTime.DayLightSaving = RTC_DAYLIGHTSAVING_NONE;
-      sTime.StoreOperation = RTC_STOREOPERATION_RESET;
+    {
+        /** Initialize RTC and set the Time and Date
+        */
+        sTime.Hours = 21;      // 9 PM in 24-hour time
+        sTime.Minutes = 07;    // Current minute
+        sTime.Seconds = 0;
+        sTime.DayLightSaving = RTC_DAYLIGHTSAVING_NONE;
+        sTime.StoreOperation = RTC_STOREOPERATION_RESET;
       
-      // Note: We changed FORMAT_BCD to FORMAT_BIN so normal decimal numbers work
-      if (HAL_RTC_SetTime(&hrtc, &sTime, RTC_FORMAT_BIN) != HAL_OK)
-      {
-        Error_Handler();
-      }
+        // Note: We changed FORMAT_BCD to FORMAT_BIN so normal decimal numbers work
+        if (HAL_RTC_SetTime(&hrtc, &sTime, RTC_FORMAT_BIN) != HAL_OK)
+        {
+          Error_Handler();
+        }
       
-      sDate.WeekDay = RTC_WEEKDAY_SATURDAY;
-      sDate.Month = RTC_MONTH_JULY;
-      sDate.Date = 11;      // 11th
-      sDate.Year = 26;      // 2026
+        sDate.WeekDay = RTC_WEEKDAY_MONDAY;
+        sDate.Month = RTC_MONTH_JULY;
+        sDate.Date = 20;      // 20th
+        sDate.Year = 26;      // 2026
 
-      if (HAL_RTC_SetDate(&hrtc, &sDate, RTC_FORMAT_BIN) != HAL_OK)
-      {
-        Error_Handler();
-      }
+        if (HAL_RTC_SetDate(&hrtc, &sDate, RTC_FORMAT_BIN) != HAL_OK)
+        {
+          Error_Handler();
+        }
 
-      // Save our secret flag to Backup Register 1 so it NEVER resets on reboot!
-      HAL_RTCEx_BKUPWrite(&hrtc, RTC_BKP_DR1, 0x32F2);
-  }
+        // Save our secret flag to Backup Register 1 so it NEVER resets on reboot!
+        HAL_RTCEx_BKUPWrite(&hrtc, RTC_BKP_DR1, 0x32F2);
+    }
   /* USER CODE BEGIN RTC_Init 2 */
 
   /* USER CODE END RTC_Init 2 */
@@ -856,6 +984,41 @@ static void MX_SPI1_Init(void)
   /* USER CODE BEGIN SPI1_Init 2 */
 
   /* USER CODE END SPI1_Init 2 */
+
+}
+
+/**
+  * @brief USART1 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_USART1_UART_Init(void)
+{
+
+  /* USER CODE BEGIN USART1_Init 0 */
+
+  /* USER CODE END USART1_Init 0 */
+
+  /* USER CODE BEGIN USART1_Init 1 */
+
+  /* USER CODE END USART1_Init 1 */
+  huart1.Instance = USART1;
+  huart1.Init.BaudRate = 115200;
+  huart1.Init.WordLength = UART_WORDLENGTH_8B;
+  huart1.Init.StopBits = UART_STOPBITS_1;
+  huart1.Init.Parity = UART_PARITY_NONE;
+  huart1.Init.Mode = UART_MODE_TX_RX;
+  huart1.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+  huart1.Init.OverSampling = UART_OVERSAMPLING_16;
+  huart1.Init.OneBitSampling = UART_ONE_BIT_SAMPLE_DISABLE;
+  huart1.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT;
+  if (HAL_UART_Init(&huart1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN USART1_Init 2 */
+
+  /* USER CODE END USART1_Init 2 */
 
 }
 
