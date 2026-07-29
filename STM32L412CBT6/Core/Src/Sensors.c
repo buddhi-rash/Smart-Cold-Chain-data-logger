@@ -189,8 +189,38 @@ void SHT45_Read (void)
 
 void LIS3DHTR_Init(void)
 {
-    uint8_t config[2]= {0x20, 0x5F}; // CTRL_REG1 (0x20) -> Value 0x5F (100Hz data rate, Normal power mode, X/Y/Z enabled)
-    // CTRL_REG1 (0x20) -> Value 0x57 (100Hz data rate, Normal power mode, X/Y/Z enabled)
+    uint8_t config[2];
+
+    // 1. CTRL_REG1 (0x20): Set data rate to 10Hz, Enable X/Y/Z[cite: 1]
+    config[0] = 0x20; 
+    config[1] = 0x27; // 10Hz ODR, Normal mode, X/Y/Z enabled
+    HAL_I2C_Master_Transmit(&hi2c1, LIS3DH_ADDR, config, 2, HAL_MAX_DELAY);
+
+    // 2. CTRL_REG2 (0x21): Enable High-pass filter for Interrupt 1[cite: 1]
+    // This removes gravity from the equation so it only triggers on sudden changes/shocks
+    config[0] = 0x21; 
+    config[1] = 0x09; 
+    HAL_I2C_Master_Transmit(&hi2c1, LIS3DH_ADDR, config, 2, HAL_MAX_DELAY);
+
+    // 3. CTRL_REG3 (0x22): Route Interrupt 1 (IA1) to the physical INT1 pin[cite: 1]
+    config[0] = 0x22; 
+    config[1] = 0x40; // I1_IA1 bit enabled
+    HAL_I2C_Master_Transmit(&hi2c1, LIS3DH_ADDR, config, 2, HAL_MAX_DELAY);
+
+    // 4. INT1_THS (0x32): Set the shock threshold[cite: 1]
+    // 1 LSb = 16 mg @ FS = +-2g. 0x10 (16) * 16mg = ~250mg threshold. 
+    config[0] = 0x32; 
+    config[1] = 0x10; // Adjust this value to make it more or less sensitive
+    HAL_I2C_Master_Transmit(&hi2c1, LIS3DH_ADDR, config, 2, HAL_MAX_DELAY);
+
+    // 5. INT1_DURATION (0x33): Set minimum duration of the shock[cite: 1]
+    config[0] = 0x33; 
+    config[1] = 0x00; // 0 = instantaneous detection
+    HAL_I2C_Master_Transmit(&hi2c1, LIS3DH_ADDR, config, 2, HAL_MAX_DELAY);
+
+    // 6. INT1_CFG (0x30): Enable OR combination of X, Y, Z high events[cite: 1]
+    config[0] = 0x30; 
+    config[1] = 0x2A; // Enable XHIE, YHIE, ZHIE (Bits 1, 3, 5)
     HAL_I2C_Master_Transmit(&hi2c1, LIS3DH_ADDR, config, 2, HAL_MAX_DELAY);
 }
 

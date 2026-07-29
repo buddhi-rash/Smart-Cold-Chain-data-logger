@@ -61,6 +61,7 @@ typedef struct {
     int16_t accel_x;
     int16_t accel_y;
     int16_t accel_z;
+    uint8_t shock_event; // NEW FIELD
 } SensorRecord_t;
 /* USER CODE END PTD */
 
@@ -101,6 +102,7 @@ char log_buffer[128];
 
 SensorRecord_t local_record_buffer[MAX_BUFFERED_READINGS];
 uint32_t local_record_count = 0; // Tracks how many readings we have stored
+volatile uint8_t shock_event_data = 0;
 
 //Display variables
 // ==========================================
@@ -413,7 +415,7 @@ void Display_HomeScreen(void)
   ssd1306_WriteString(buf, Font_16x24, White);
 
   // UPDATED TO USE YOUR SHT45 VARIABLE
-  snprintf(buf, sizeof(buf), "Hum: %.0f%%", humidity-29.0f);
+  snprintf(buf, sizeof(buf), "Hum: %.0f%%", humidity);
   ssd1306_SetCursor(64, 10);
   ssd1306_WriteString(buf, Font_7x10, White);
 
@@ -674,13 +676,55 @@ int main(void)
                   
                   local_record_count++;
               }
+
+              /*if (f_mount(&fs, USERPath, 1) == FR_OK) 
+              {
+                if (f_open(&fil, "maindata.csv", FA_OPEN_ALWAYS | FA_WRITE) == FR_OK) 
+                {
+                    // ==========================================
+                    // NEW: Check if the file is brand new (size 0)
+                    // ==========================================
+                    if (f_size(&fil) == 0) 
+                    {
+                        // File was just created, write the header!
+                        f_c=0.2f;
+                        char header[] = "Date,Time,Temperature(C),Humidity(%),Accel_X,Accel_Y,Accel_Z\n";
+                        f_write(&fil, header, strlen(header), &bytesWritten);
+                    }
+                    else
+                    {
+                        // File already exists, just jump to the end
+                        f_c=0.1f;
+                        f_lseek(&fil, f_size(&fil)); 
+                    }
+
+                    // Loop through all saved readings and write them
+                    for (uint32_t i = 0; i < local_record_count; i++) 
+                    {
+                        snprintf(log_buffer, sizeof(log_buffer), "20%02d-%02d-%02d,%02d:%02d:%02d,%.2f,%.2f,%d,%d,%d\n",
+                                local_record_buffer[i].year, local_record_buffer[i].month, local_record_buffer[i].date,
+                                local_record_buffer[i].hours, local_record_buffer[i].minutes, local_record_buffer[i].seconds,
+                                local_record_buffer[i].temperature, local_record_buffer[i].humidity, 
+                                local_record_buffer[i].accel_x, local_record_buffer[i].accel_y, local_record_buffer[i].accel_z);
+                      
+                        f_write(&fil, log_buffer, strlen(log_buffer), &bytesWritten);
+                    }
+                    f_close(&fil);
+                }
+            }*/
+
+              // 3. Reset the buffer counter since data is now saved
+              //local_record_count = 0;
+          
+              // 4. Unmount FatFs safely so the PC can take control of the Flash memory
+              //f_mount(NULL, USERPath, 0); 
               
               char date_buffer[16];
               char time_buffer[16];
               snprintf(date_buffer, sizeof(date_buffer), "%d/%d/20%02d", sDate.Month, sDate.Date, sDate.Year);
               snprintf(time_buffer, sizeof(time_buffer), "%02d:%02d:%02d", sTime.Hours, sTime.Minutes, sTime.Seconds);
-              GSM_AddReading(date_buffer, time_buffer, temperature, humidity - 29.0f, LIS3DH_X, LIS3DH_Y, LIS3DH_Z - 63);
-
+              GSM_AddReading(date_buffer, time_buffer, live_temperature, humidity, LIS3DH_X, LIS3DH_Y, LIS3DH_Z, shock_event_data);
+              shock_event_data=0;
               if (((current_time_ms - last_upload_ms) >= (Uploading_Interval * 1000)) || 
                   (GSM_GetBufferCount() >= MAX_READINGS)) 
               {
@@ -1067,7 +1111,24 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
+{
+    // Check if the interrupt came from the IMU pin
+    if (GPIO_Pin == IMU_int_Pin)
+    {
+        // Force the main loop to read sensors immediately by tricking the timer
+        // We set last_sensor_read_ms far into the past so the standard interval triggers on the next loop
+        last_sensor_read_ms = 0; 
+        
+        // Optional: Read INT1_SRC (0x31) to clear the interrupt flag on the sensor[cite: 1]
+        uint8_t reg = 0x31 | 0x80;
+        uint8_t dummy_read;
+        HAL_I2C_Master_Transmit(&hi2c1, LIS3DH_ADDR, &reg, 1, 100);
+        HAL_I2C_Master_Receive(&hi2c1, LIS3DH_ADDR, &dummy_read, 1, 100);
 
+        shock_event_data = dummy_read;
+    }
+}
 /* USER CODE END 4 */
 
 /**
