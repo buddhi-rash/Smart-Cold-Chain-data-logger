@@ -607,10 +607,10 @@ int main(void)
           }*/
 
           // 3. Reset the buffer counter since data is now saved
-          local_record_count = 0;
+          //local_record_count = 0;
           
           // 4. Unmount FatFs safely so the PC can take control of the Flash memory
-          f_mount(NULL, USERPath, 0); 
+          //f_mount(NULL, USERPath, 0); 
           was_usb_connected = 1;
       }
       // =========================================================
