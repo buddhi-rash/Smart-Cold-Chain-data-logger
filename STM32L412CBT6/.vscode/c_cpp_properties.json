@@ -17,7 +17,10 @@
                 "USE_HAL_DRIVER",
                 "STM32L412xx"
             ],
-            "compileCommands": "${workspaceFolder}/build/Debug/compile_commands.json"
+            "compileCommands": [
+                "${workspaceFolder}/build/Debug/compile_commands.json"
+            ]
         }
-    ]
+    ],
+    "version": 4
 }
