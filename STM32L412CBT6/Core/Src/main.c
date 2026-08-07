@@ -568,7 +568,7 @@ int main(void)
           ssd1306_SetCursor(10, 40);
           ssd1306_WriteString("Syncing Data...", Font_7x10, White);
           ssd1306_UpdateScreen();
-          
+          // Not working --> competition between windows and stm32 to write and read the flash memory.
           // 2. Quickly mount FatFs and dump our RAM buffer into the CSV file
           /*if (f_mount(&fs, USERPath, 1) == FR_OK) 
           {
@@ -676,7 +676,7 @@ int main(void)
                   
                   local_record_count++;
               }
-
+              // Not working --> SPI Mode 0 holds from FATFS and Doesn't allow the MAX31865 to read in Mode 3.
               /*if (f_mount(&fs, USERPath, 1) == FR_OK) 
               {
                 if (f_open(&fil, "maindata.csv", FA_OPEN_ALWAYS | FA_WRITE) == FR_OK) 
