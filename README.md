@@ -15,12 +15,12 @@ Cold‑chain failures in pharmaceuticals and biologics lead to massive product l
 
 - **±0.1 °C accuracy** (Sensirion SHT45) for GDP/regulatory compliance  
 - **Real‑time LTE‑M/NB‑IoT alerts** via SIM7070G / A7670C cellular module  
-- **60‑day battery life** (5000 mAh 21700 Li‑Ion, ultra‑low‑power design)  
+- **30‑day battery life** (5000 mAh 21700 Li‑Ion, ultra‑low‑power design)  
 - **USB‑C mass‑storage export** – plug into any PC, get PDF + CSV automatically  
 - **Condition‑based monitoring** – logging frequency adapts near alarm thresholds  
 - **External PT100 RTD probe** support for payload‑core temperature  
 - **Minimalistic UI** – 1.3″ OLED, 3 tactile buttons, RGB status LED, piezo buzzer  
-- **Open MQTT cloud** – no vendor lock‑in  
+- **HTTPS cloud** – Cloud upload the data in real time  
 - **4‑layer PCB** with controlled impedance (90 Ω USB), hand‑solderable components  
 
 ---
