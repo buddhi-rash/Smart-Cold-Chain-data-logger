@@ -3,6 +3,8 @@
 
 #include "main.h"
 
+#define LIS3DH_ADDR (0x18 << 1) // 0x30
+
 extern SPI_HandleTypeDef hspi1;
 extern I2C_HandleTypeDef hi2c1;
 

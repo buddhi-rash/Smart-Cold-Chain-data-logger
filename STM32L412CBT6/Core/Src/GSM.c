@@ -31,7 +31,7 @@ int GSM_GetBufferCount(void) {
 // ---------------------------------------------------------
 // ADD READING TO RAM BUFFER
 // ---------------------------------------------------------
-void GSM_AddReading(const char* date, const char* time, float temp, float hum, int lis_x, int lis_y, int lis_z) {
+void GSM_AddReading(const char* date, const char* time, float temp, float hum, int lis_x, int lis_y, int lis_z, uint8_t shock_event) {
     if (currentReadingCount < MAX_READINGS) {
         // Copy the string into the struct safely
         strncpy(readingBuffer[currentReadingCount].date, date, sizeof(readingBuffer[0].date) - 1);
@@ -46,6 +46,7 @@ void GSM_AddReading(const char* date, const char* time, float temp, float hum, i
         readingBuffer[currentReadingCount].lis3dhx = lis_x;
         readingBuffer[currentReadingCount].lis3dhy = lis_y;
         readingBuffer[currentReadingCount].lis3dhz = lis_z;
+        readingBuffer[currentReadingCount].shock_event = shock_event; // STORE IT
         currentReadingCount++;
     }
 }
@@ -122,14 +123,15 @@ static int buildBatchPayload(void) {
     for (int i = 0; i < currentReadingCount; i++) {
         // Formats the timestamp securely as a text string
         snprintf(tempStrBuffer, sizeof(tempStrBuffer), 
-            "{\"date\":\"%s\",\"time\":\"%s\",\"temperature_c\":%.2f,\"humidity_pct\":%.2f,\"lis3dhx\":%d,\"lis3dhy\":%d,\"lis3dhz\":%d}",
+            "{\"date\":\"%s\",\"time\":\"%s\",\"temperature_c\":%.2f,\"humidity_pct\":%.2f,\"lis3dhx\":%d,\"lis3dhy\":%d,\"lis3dhz\":%d,\"shock_event\":%u}",
             readingBuffer[i].date, 
             readingBuffer[i].time, 
             readingBuffer[i].temp_c, 
             readingBuffer[i].hum_pct, 
             readingBuffer[i].lis3dhx, 
             readingBuffer[i].lis3dhy, 
-            readingBuffer[i].lis3dhz
+            readingBuffer[i].lis3dhz,
+            readingBuffer[i].shock_event // PRINT IT
         );
         
         strcat(jsonPayload, tempStrBuffer);

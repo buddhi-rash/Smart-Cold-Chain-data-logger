@@ -17,11 +17,12 @@ typedef struct {
     int lis3dhx;
     int lis3dhy;
     int lis3dhz;
+    uint8_t shock_event; // NEW FIELD
 } SensorReading_t;
 
 // Public Functions
 void GSM_Init(UART_HandleTypeDef *huart);
-void GSM_AddReading(const char* date, const char* time, float temp, float hum, int lis_x, int lis_y, int lis_z);
+void GSM_AddReading(const char* date, const char* time, float temp, float hum, int lis_x, int lis_y, int lis_z, uint8_t shock_event);
 void GSM_UploadBuffer(void);
 int GSM_GetBufferCount(void);
 
